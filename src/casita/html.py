@@ -3,6 +3,7 @@
 iPhone-first responsive layout. Helvetica Neue. Designed to be uploaded
 to a public GCS bucket and shared by URL.
 """
+import json
 import re
 import os
 from datetime import datetime, timedelta, timezone
@@ -11,9 +12,9 @@ from zoneinfo import ZoneInfo
 
 from . import dogs
 from .models import Listing
-from .profiles import LifestyleProfile, get_profile
+from .profiles import ALL_ANCHOR_GROUPS, LifestyleProfile, get_profile
 from .rank import score
-from .walk import BAKERIES, BEACHES, PRESIDIO_GATES, TRAILS, minutes_to, nearest
+from .walk import BAKERIES, BEACHES, PRESIDIO_GATES, TRAILS, is_marin, minutes_to, nearest
 
 
 def site_url() -> str:
@@ -232,6 +233,106 @@ SEARCH_JS = """<script>
   }
   paintControls();
   apply();
+})();
+</script>"""
+
+
+# Client-side "customize ranking" picker. Each chip is an independent
+# on/off toggle (not a radio group like .since-chip) over a preference
+# category; with >=1 active the grid re-sorts by a score computed entirely
+# in the browser from the per-listing signals embedded in
+# #casita-signals — no server round-trip, works on the static demo.
+#
+# walkBonus/scoreListing intentionally mirror rank.py's _walk_bonus/score:
+# keep them in sync by hand if either changes. PREF_GROUPS' weight/
+# sweetSpot values mirror profiles.ALL_ANCHOR_GROUPS.
+PREFS_JS = """<script>
+(function() {
+  var signalsEl = document.getElementById('casita-signals');
+  var grid = document.querySelector('main.grid');
+  if (!signalsEl || !grid) return;
+  var signals = JSON.parse(signalsEl.textContent || '{}');
+  var chips = Array.from(document.querySelectorAll('.pref-chip'));
+  if (!chips.length) return;
+
+  var PREF_GROUPS = {
+    trail:        { weight: 2, sweetSpot: 10 },
+    beach:        { weight: 1, sweetSpot: 10 },
+    bakery:       { weight: 1, sweetSpot: 10 },
+    gym:          { weight: 2, sweetSpot: 15 },
+    halal_market: { weight: 1, sweetSpot: 15 },
+    commute:      { weight: 1, sweetSpot: 20 }
+  };
+
+  // Original server-rendered order, captured once before any reordering —
+  // restoring "no chips active" just replays this.
+  var originalOrder = Array.from(grid.querySelectorAll('.card'));
+
+  function walkBonus(minutes, sweetSpot) {
+    if (minutes === null || minutes === undefined) return 0;
+    if (minutes <= sweetSpot) return 15;
+    if (minutes <= sweetSpot + 5) return 10;
+    if (minutes <= sweetSpot + 10) return 5;
+    if (minutes <= sweetSpot + 20) return 1;
+    return -3;
+  }
+
+  function scoreListing(sig, activeGroups, dogsOn) {
+    var s = 0;
+    if (dogsOn) {
+      if (sig.dog_policy === 'no_dogs' || sig.pets_allowed === false) return -1000;
+      if (sig.dog_policy === 'small_only') s -= 30;
+      if (sig.dog_policy === 'large_ok') s += 12;
+      else if (sig.dog_policy === 'dogs_ok') s += 6;
+    }
+    activeGroups.forEach(function(key) {
+      var cfg = PREF_GROUPS[key];
+      if (!cfg) return;
+      s += walkBonus(sig[key], cfg.sweetSpot) * cfg.weight;
+    });
+    // Baseline terms — always applied, same as rank.py's score().
+    if (sig.beds >= 3) s += 4;
+    if (sig.baths >= 1.5) s += 5;
+    if (sig.laundry === 'in-unit') s += 3;
+    else if (sig.laundry === 'shared (in building)') s += 1;
+    else if (sig.laundry === 'hookups only' || sig.laundry === 'none') s -= 2;
+    var parking = (sig.parking || '').toLowerCase();
+    if (sig.parking && parking.indexOf('no parking') === -1 && sig.parking !== 'none') s += 2;
+    if (sig.parking && parking.indexOf('garage') !== -1) s += 2;
+    return s;
+  }
+
+  function activePrefs() {
+    return chips
+      .filter(function(c) { return c.getAttribute('aria-pressed') === 'true'; })
+      .map(function(c) { return c.dataset.pref; });
+  }
+
+  function apply() {
+    var active = activePrefs();
+    if (!active.length) {
+      document.body.removeAttribute('data-customizing');
+      originalOrder.forEach(function(c) { grid.appendChild(c); });
+      return;
+    }
+    document.body.setAttribute('data-customizing', 'true');
+    var dogsOn = active.indexOf('dogs') !== -1;
+    var groups = active.filter(function(k) { return k !== 'dogs'; });
+    var scored = originalOrder.map(function(c) {
+      var sig = signals[c.dataset.key] || {};
+      return { card: c, score: scoreListing(sig, groups, dogsOn) };
+    });
+    scored.sort(function(a, b) { return b.score - a.score; });
+    scored.forEach(function(item) { grid.appendChild(item.card); });
+  }
+
+  chips.forEach(function(chip) {
+    chip.addEventListener('click', function() {
+      var active = chip.getAttribute('aria-pressed') === 'true';
+      chip.setAttribute('aria-pressed', active ? 'false' : 'true');
+      apply();
+    });
+  });
 })();
 </script>"""
 
@@ -627,8 +728,9 @@ h1 {
   width: 100%; padding: 0;
 }
 .search-box input::placeholder { color: var(--ink-3); }
-/* "Added since" filter — chip row + custom date, matches the search bar */
-.since-filter {
+/* "Added since" filter — chip row + custom date, matches the search bar.
+   .pref-filter (the "customize ranking" chip row) shares this layout. */
+.since-filter, .pref-filter {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   margin-top: 12px;
 }
@@ -801,6 +903,14 @@ h1 {
 .fit-ok       { color: var(--accent); }
 .fit-concerns { color: var(--caution); }
 .fit-filtered { color: var(--warn); }
+
+/* While a client-side preference combination is active (PREFS_JS), the
+   server-rendered severity/fit/feature badges were computed for whichever
+   profile rendered the page — stale for a visitor's own combination, so
+   they're hidden rather than left to look like an endorsement. */
+body[data-customizing] .fit,
+body[data-customizing] .feature-flag { display: none; }
+body[data-customizing] .card.sev-filtered { opacity: 1; }
 
 /* —— Gemini reason on card —— */
 .card-reason {
@@ -1639,6 +1749,32 @@ _FILTER_JS = """
 """
 
 
+def _signal_payload(listings: list[Listing], walk_map: dict, drive_map: dict) -> dict[str, dict]:
+    """Per-listing raw signals for the client-side preference picker (PREFS_JS).
+
+    One minutes-to-nearest value per ALL_ANCHOR_GROUPS category — walk time
+    for SF listings, drive time for Marin (same is_marin split _render_kv /
+    _walk_summary already use) — plus the baseline fields rank.score()
+    applies regardless of which chips are active.
+    """
+    payload: dict[str, dict] = {}
+    for L in listings:
+        source = drive_map if is_marin(L) else walk_map
+        signals: dict = {
+            "dog_policy": L.dog_policy,
+            "pets_allowed": L.pets_allowed,
+            "beds": L.beds,
+            "baths": L.baths,
+            "laundry": L.laundry,
+            "parking": L.parking,
+        }
+        for group in ALL_ANCHOR_GROUPS:
+            best = nearest(source, L.key, group.anchors)
+            signals[group.key] = best[1] if best else None
+        payload[L.key] = signals
+    return payload
+
+
 def render(
     listings: list[Listing], run=None, walk_map: dict | None = None,
     convo_map: dict[str, dict] | None = None,
@@ -1671,6 +1807,16 @@ def render(
               profile=profile)
         for L in listings
     )
+
+    # Client-side "customize ranking" chip bar + the raw signals it needs
+    # (PREFS_JS) — independent of which server profile rendered the page.
+    pref_chip = '<button type="button" class="since-chip pref-chip" data-pref="{key}" aria-pressed="false">{label}</button>'
+    pref_chips_html = pref_chip.format(key="dogs", label="Dogs") + "".join(
+        pref_chip.format(key=group.key, label=group.label.capitalize())
+        for group in ALL_ANCHOR_GROUPS
+    )
+    signals_json = json.dumps(_signal_payload(listings, walk_map or {}, drive_map)).replace("<", "\\u003c")
+
     ts_raw = (run["finished_at"] or run["started_at"]) if run else datetime.utcnow().isoformat()
     try:
         dt = datetime.fromisoformat(str(ts_raw)).replace(tzinfo=timezone.utc)
@@ -1767,6 +1913,10 @@ def render(
       <button type="button" class="since-chip" data-days="7" aria-pressed="false">7 days</button>
       <input type="date" id="since-date" class="since-date" aria-label="Added on or after this date">
     </div>
+    <div class="pref-filter" role="group" aria-label="Customize ranking">
+      <span class="since-label">Customize</span>
+      {pref_chips_html}
+    </div>
     <div class="search-meta"><span id="search-count">{count}</span> of {count} shown · refreshed {ts}</div>
   </div>
 </header>
@@ -1775,11 +1925,13 @@ def render(
 </main>
 <footer><span class="footer-mark">Casita</span> · personal-use rental search</footer>
 </div>
+<script type="application/json" id="casita-signals">{signals_json}</script>
 {CAROUSEL_JS}
 {SEARCH_JS}
 {SHARE_JS}
 {VOTE_JS}
 {THEME_SWITCH_JS}
+{PREFS_JS}
 </body>
 </html>
 """
