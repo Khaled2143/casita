@@ -287,6 +287,10 @@ def _render_kv(L: Listing, walk_map, drive_map, drive_bakery, profile: Lifestyle
     DRIVE = ""
     WALK_SUFFIX = ' <span class="mode-word">walk</span>'
     DRIVE_SUFFIX = ' <span class="mode-word">drive</span>'
+    # Distinct from DRIVE_SUFFIX — this one's never cached or API-sourced,
+    # just a straight-line-distance guess (see haversine_drive_minutes),
+    # so it's labeled to avoid reading as a real route.
+    DRIVE_EST_SUFFIX = ' <span class="mode-word">drive (est.)</span>'
 
     # Listing origin for Directions URL — None when we lack coords.
     origin = (L.lat, L.lng) if (L.lat is not None and L.lng is not None) else None
@@ -329,7 +333,7 @@ def _render_kv(L: Listing, walk_map, drive_map, drive_bakery, profile: Lifestyle
             elif m > 45 and L.lat is not None and L.lng is not None:
                 d_m = haversine_drive_minutes(L.lat, L.lng, a)
                 link = _anchor_link_html(a, origin=origin, mode="driving")
-                rows.append(row(group.label, f'{d_m} min{DRIVE_SUFFIX} · {link}'))
+                rows.append(row(group.label, f'{d_m} min{DRIVE_EST_SUFFIX} · {link}'))
             else:
                 link = _anchor_link_html(a, origin=origin, mode="walking")
                 rows.append(row(group.label, f'{m} min{WALK_SUFFIX} · {link}', _walk_class(m)))
