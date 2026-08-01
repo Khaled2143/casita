@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from . import dogs
 from .models import Listing
+from .profiles import LifestyleProfile, get_profile
 from .rank import score
 from .walk import BAKERIES, BEACHES, PRESIDIO_GATES, TRAILS, minutes_to, nearest
 
@@ -1391,13 +1392,14 @@ def _amenity_chips(L: Listing) -> list[str]:
 
 def _card(L: Listing, walk_map: dict | None = None, convo: dict | None = None,
           drive_bakery: tuple | None = None, drive_map: dict | None = None,
-          feature: bool = False) -> str:
+          feature: bool = False, profile: LifestyleProfile | str | None = None) -> str:
     """Card surface — editorial listing card:
        Photo (carousel) · source + dog overlays · neighborhood + fit verdict ·
        price + size · address · Gemini take · amenity + conversation chips.
        Parking, laundry, walks, etc. all live on the detail page.
     """
     from .listing_page import listing_url
+    profile = get_profile(profile)
     detail_href = listing_url(L)
 
     # ISO date this listing first entered the DB — drives the "Added since"
@@ -1452,7 +1454,12 @@ def _card(L: Listing, walk_map: dict | None = None, convo: dict | None = None,
     stat_line = " · ".join(stats)
 
     # Severity → card-level border class. Color carries the meaning; no badge.
-    sev = L.llm_severity or ("filtered" if (L.llm_rank or 0) >= 9000 else "ok")
+    # Only trust the DB's llm_severity/llm_rank when they were computed under
+    # the active profile — otherwise they're stale household-priority output.
+    if profile.trust_llm_fields:
+        sev = L.llm_severity or ("filtered" if (L.llm_rank or 0) >= 9000 else "ok")
+    else:
+        sev = "ok"
     sev_class = f"sev-{sev}"
 
     # Eliminated overlay — soft-delete via listing_status. Pushed to the bottom
@@ -1469,8 +1476,10 @@ def _card(L: Listing, walk_map: dict | None = None, convo: dict | None = None,
 
     # The reason from Gemini IS the card's main message — share_blurb wins
     # when present (designer-friendly), else fall back to llm_reason, else
-    # visual_summary, else nothing.
-    reason_text = L.share_blurb or L.llm_reason or L.visual_summary or ""
+    # visual_summary, else nothing. llm_reason is only shown when it was
+    # written for the active profile's priorities.
+    llm_reason = L.llm_reason if profile.trust_llm_fields else None
+    reason_text = L.share_blurb or llm_reason or L.visual_summary or ""
     reason_html = (
         f'<div class="card-reason">{_esc(reason_text)}</div>' if reason_text else ""
     )
@@ -1627,25 +1636,30 @@ def render(
     drive_bakery_map: dict | None = None,
     drive_map: dict | None = None,
     title: str = "Casita",
+    profile: LifestyleProfile | str | None = None,
 ) -> str:
+    profile = get_profile(profile)
     convo_map = convo_map or {}
     drive_bakery_map = drive_bakery_map or {}
     drive_map = drive_map or {}
 
     # Pick the feature card — the top-ranked strong fit that isn't eliminated.
     # rank() already sorts best-first, so the first qualifying listing wins.
+    # Only meaningful when llm_severity was computed under this profile.
     elim_set = {"declined_by_landlord", "declined_by_us", "passed_on"}
     feature_key = None
-    for L in listings:
-        status = (convo_map.get(L.key) or {}).get("status")
-        if L.llm_severity == "ok" and status not in elim_set:
-            feature_key = L.key
-            break
+    if profile.trust_llm_fields:
+        for L in listings:
+            status = (convo_map.get(L.key) or {}).get("status")
+            if L.llm_severity == "ok" and status not in elim_set:
+                feature_key = L.key
+                break
 
     cards = "\n".join(
         _card(L, walk_map=walk_map, convo=convo_map.get(L.key),
               drive_bakery=drive_bakery_map.get(L.key),
-              drive_map=drive_map, feature=(L.key == feature_key))
+              drive_map=drive_map, feature=(L.key == feature_key),
+              profile=profile)
         for L in listings
     )
     ts_raw = (run["finished_at"] or run["started_at"]) if run else datetime.utcnow().isoformat()
@@ -1658,7 +1672,7 @@ def render(
     count = len(listings)
 
     # Editorial stat strip — the search at a glance.
-    strong = sum(1 for L in listings if L.llm_severity == "ok")
+    strong = sum(1 for L in listings if L.llm_severity == "ok") if profile.trust_llm_fields else 0
     active_convo = {"contacted", "viewing_scheduled", "viewing_done", "applied",
                     "accepted", "shortlist"}
     in_convo = sum(

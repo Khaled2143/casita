@@ -22,6 +22,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from . import dogs
+from .profiles import LifestyleProfile, get_profile
 from .html import (
     CAROUSEL_JS,
     CSS,
@@ -61,7 +62,7 @@ def _scrub(s: str | None) -> str | None:
         s = pat.sub("[redacted]", s)
     return s
 from .models import Listing
-from .walk import BAKERIES, BEACHES, PRESIDIO_GATES, TRAILS, minutes_to, nearest
+from .walk import nearest
 
 ROOT = Path(__file__).parent.parent.parent
 
@@ -243,7 +244,7 @@ _DETAIL_CSS = """
 """
 
 
-def _render_kv(L: Listing, walk_map, drive_map, drive_bakery) -> str:
+def _render_kv(L: Listing, walk_map, drive_map, drive_bakery, profile: LifestyleProfile) -> str:
     rows: list[str] = []
 
     def row(k: str, v: str, klass: str = "v") -> str:
@@ -299,37 +300,31 @@ def _render_kv(L: Listing, walk_map, drive_map, drive_bakery) -> str:
                 if m is None: continue
                 if best is None or m < best[1]: best = (a, m)
             return best
-        for label, anchors in [("trail", TRAILS), ("beach", BEACHES), ("bakery", BAKERIES)]:
-            b = _best(anchors)
+        for group in profile.anchor_groups:
+            b = _best(group.anchors)
             if b:
                 a, m = b
                 link = _anchor_link_html(a, origin=origin, mode="driving")
-                rows.append(row(label, f'{m} min{DRIVE_SUFFIX} · {link}'))
+                rows.append(row(group.label, f'{m} min{DRIVE_SUFFIX} · {link}'))
         sf = drive_map.get((L.key, _SFC[0].name))
         if sf is not None:
             link = _anchor_link_html(_SFC[0], origin=origin, mode="driving")
             rows.append(row("to sf", f'{sf} min{DRIVE_SUFFIX} · {link}'))
     elif walk_map is not None:
-        np = nearest(walk_map, L.key, TRAILS)
-        if np:
-            a, m = np
-            link = _anchor_link_html(a, origin=origin, mode="walking")
-            rows.append(row("trail", f'{m} min{WALK_SUFFIX} · {link}', _walk_class(m)))
-        nb = nearest(walk_map, L.key, BEACHES)
-        if nb:
-            a, m = nb
-            link = _anchor_link_html(a, origin=origin, mode="walking")
-            rows.append(row("beach", f'{m} min{WALK_SUFFIX} · {link}', _walk_class(m)))
-        nba = nearest(walk_map, L.key, BAKERIES)
-        if nba:
-            a, m = nba
-            if m > 45 and drive_bakery:
+        for group in profile.anchor_groups:
+            best = nearest(walk_map, L.key, group.anchors)
+            if not best:
+                continue
+            a, m = best
+            # Bakery-specific fallback: past a 45-min walk, show the drive
+            # time instead — same special case the card has always had.
+            if group.key == "bakery" and m > 45 and drive_bakery:
                 d_a, d_m = drive_bakery
                 link = _anchor_link_html(d_a, origin=origin, mode="driving")
-                rows.append(row("bakery", f'{d_m} min{DRIVE_SUFFIX} · {link}'))
+                rows.append(row(group.label, f'{d_m} min{DRIVE_SUFFIX} · {link}'))
             else:
                 link = _anchor_link_html(a, origin=origin, mode="walking")
-                rows.append(row("bakery", f'{m} min{WALK_SUFFIX} · {link}', _walk_class(m)))
+                rows.append(row(group.label, f'{m} min{WALK_SUFFIX} · {link}', _walk_class(m)))
 
     if L.contact_name or L.contact_phone or L.contact_email:
         bits = []
@@ -437,7 +432,9 @@ def _compose_share_blurb(L: Listing) -> str:
 
 
 def render_detail(L: Listing, conn: sqlite3.Connection, walk_map=None,
-                  drive_map=None, drive_bakery_map=None) -> str:
+                  drive_map=None, drive_bakery_map=None,
+                  profile: LifestyleProfile | str | None = None) -> str:
+    profile = get_profile(profile)
     listing_path = listing_url(L)
     share_blurb = _scrub(_compose_share_blurb(L)) or "Casita listing"
 
@@ -507,7 +504,7 @@ def render_detail(L: Listing, conn: sqlite3.Connection, walk_map=None,
         )
 
     reason_html = ""
-    if L.llm_reason:
+    if L.llm_reason and profile.trust_llm_fields:
         sev = L.llm_severity or "ok"
         cls = {"filtered": "why why-filtered", "concerns": "why why-concerns"}.get(sev, "why")
         # No rank number — it churns on every re-rank with no stable meaning.
@@ -535,7 +532,7 @@ def render_detail(L: Listing, conn: sqlite3.Connection, walk_map=None,
     facts_html = (
         f'<div class="detail-section">'
         f'<h2>Facts</h2>'
-        f'{_render_kv(L, walk_map, drive_map, drive_bakery_map.get(L.key) if drive_bakery_map else None)}'
+        f'{_render_kv(L, walk_map, drive_map, drive_bakery_map.get(L.key) if drive_bakery_map else None, profile)}'
         f'</div>'
     )
 
