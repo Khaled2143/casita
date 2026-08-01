@@ -87,6 +87,26 @@ SF_CENTER: list[Anchor] = [
            37.7956, -122.3933, place_id="ChIJWTGPjmaAhYARxz6l1hOj92w"),
 ]
 
+# Anchors for the "sf_gym_halal" example profile (profiles.py) — a different
+# household's priorities, re-ranking the same listing set. Real, named
+# places; coordinates are hand-placed from their street addresses rather
+# than Places-API-curated like the anchors above, so no rating/place_id.
+GYMS: list[Anchor] = [
+    Anchor("Live Fit Gym (Inner Richmond, 403 Arguello Blvd)", "Live Fit Gym", 37.7835, -122.4593),
+    Anchor("Ultimate Fitness (Mill Valley, 455 Miller Ave)", "Ultimate Fitness", 37.8970, -122.5350),
+]
+
+HALAL_MARKETS: list[Anchor] = [
+    Anchor("Salama Halal Meat (Downtown SF, 604 Geary St)", "Salama Halal Meat", 37.7869, -122.4129),
+]
+
+# A single downtown SF workplace anchor for the commute-priority profile.
+# Distinct from SF_CENTER (the Ferry Building) even though they're close by —
+# this one stands in for "the office," not "the ferry."
+WORK_COMMUTE: list[Anchor] = [
+    Anchor("Salesforce Tower (Financial District)", "Downtown SF", 37.7897, -122.3972),
+]
+
 _WALK_SPEED_KMH = 4.5
 _GRID_FACTOR = 1.30
 _DRIVE_SPEED_KMH = 45.0
