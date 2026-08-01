@@ -10,6 +10,15 @@ prompt to use for live `casita enrich` runs.
 `sf_dogs` is the original household's profile — migrated verbatim from what
 used to be hardcoded across `rank.py`, `llm.py`, and `walk.py`. It's the
 default; nothing about its behavior changes by existing here instead.
+
+`sf_gym_halal` is a second, unrelated household re-ranking the exact same
+listing set: no dogs, no yard preference, no SF-neighborhood bonus —
+instead a gym, a halal market, and a downtown commute. It proves the
+ranking layer generalizes without touching scraping, the Listing schema,
+or the demo fixture. `trust_llm_fields=False` because the fixture's
+llm_rank/llm_reason/llm_severity were written for sf_dogs's priorities —
+see rank.py's sort_key and html.py/listing_page.py's rendering, which both
+fall back to deterministic-only ranking when a profile doesn't trust them.
 """
 from __future__ import annotations
 
@@ -17,7 +26,9 @@ import os
 import textwrap
 from dataclasses import dataclass
 
-from .walk import Anchor, BAKERIES, BEACHES, PRESIDIO_GATES
+from .walk import (
+    Anchor, BAKERIES, BEACHES, GYMS, HALAL_MARKETS, PRESIDIO_GATES, WORK_COMMUTE,
+)
 
 
 @dataclass(frozen=True)
@@ -189,6 +200,43 @@ _SF_DOGS_RANK_PROMPT = textwrap.dedent("""
 """).strip()
 
 
+_SF_GYM_HALAL_RANK_PROMPT = textwrap.dedent("""
+    You're ranking rental listings for a single professional working in San
+    Francisco's Financial District. They have no pets and no yard
+    requirement. What matters: an easy commute downtown, a gym they can
+    walk to, and a halal market nearby for groceries.
+
+    ── HARD REQUIREMENTS — drop the listing from results if any fail ──
+      • None. Only drop a listing (severity="filtered") if it's an unusable
+        stub with no price, no bed count, and no address — a multi-unit
+        building landing page with nothing real to evaluate.
+
+    ── STRONG REQUIREMENTS — heavy penalty if missing, not a hard gate ──
+      • Commute: an easy walk or short transit ride to the Financial
+        District. A long commute is a significant penalty, not a filter.
+      • In-unit or shared-in-building laundry preferred over hookups-only
+        or none.
+
+    ── PREFERENCES — in priority order, used to break ties and shape ranking ──
+      1. Close to a gym — walkable beats needing to drive.
+      2. Close to a halal market — grocery runs without a special trip.
+      3. Close to downtown / the commute anchor.
+      4. Lower price, all else equal.
+
+    ── OUTPUT FORMAT ──
+    Return EVERY listing in the input — none dropped silently. Order best
+    first. Each entry has:
+      • key: the listing key
+      • reason: one short sentence with the load-bearing facts
+      • severity:
+          - "ok"       → Reasonable commute, plausible gym or halal market
+                         access.
+          - "concerns" → Long commute, no nearby gym or halal market, or
+                         missing data worth flagging.
+          - "filtered" → Unusable stub listing only (see HARD REQUIREMENTS).
+""").strip()
+
+
 PROFILES: dict[str, LifestyleProfile] = {
     "sf_dogs": LifestyleProfile(
         key="sf_dogs",
@@ -217,6 +265,19 @@ PROFILES: dict[str, LifestyleProfile] = {
         dog_gate=True,
         trust_llm_fields=True,
         rank_prompt=_SF_DOGS_RANK_PROMPT,
+    ),
+    "sf_gym_halal": LifestyleProfile(
+        key="sf_gym_halal",
+        label="SF + Marin — gym, halal market, downtown commute",
+        anchor_groups=[
+            AnchorGroup("gym", "gym", GYMS, weight=2, sweet_spot=15),
+            AnchorGroup("halal_market", "halal market", HALAL_MARKETS, weight=1, sweet_spot=15),
+            AnchorGroup("commute", "commute", WORK_COMMUTE, weight=1, sweet_spot=20),
+        ],
+        hood_bonus={},
+        dog_gate=False,
+        trust_llm_fields=False,
+        rank_prompt=_SF_GYM_HALAL_RANK_PROMPT,
     ),
 }
 
