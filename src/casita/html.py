@@ -330,7 +330,7 @@ PREFS_JS = """<script>
       groups.forEach(function(key) {
         var mins = sig[key];
         if (mins === null || mins === undefined) return;
-        if (mins < 10 && (best === null || mins < best.mins)) {
+        if (mins <= 10 && (best === null || mins < best.mins)) {
           best = { key: key, mins: mins };
         }
       });

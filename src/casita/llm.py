@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from . import cache
 from .models import Listing
-from .profiles import LifestyleProfile, get_profile
+from .profiles import LifestyleProfile, get_profile, PROFILES, DEFAULT_PROFILE_KEY
 
 load_dotenv()
 
@@ -230,7 +230,7 @@ _EXTRACT_SYSTEM = (
 # (profiles.py) as `rank_prompt` — this is a backward-compatible alias to
 # the default household's prompt, kept for `analyze_preferences`'s
 # unparameterized usage below.
-_RANK_SYSTEM = get_profile(None).rank_prompt
+_RANK_SYSTEM = PROFILES[DEFAULT_PROFILE_KEY].rank_prompt
 
 
 # ---------- helpers ----------
