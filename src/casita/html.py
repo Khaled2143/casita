@@ -1319,7 +1319,7 @@ def _anchor_link_html(anchor, *, origin: tuple[float, float] | None = None,
             params.append(f"destination_place_id={anchor.place_id}")
             params.append(f"destination={quote_plus(name_q)}")
         else:
-            params.append(f"destination={quote_plus(name_q)}@{anchor.lat},{anchor.lng}")
+            params.append(f"destination={anchor.lat},{anchor.lng}")
         url = f"https://www.google.com/maps/dir/?api=1&{'&'.join(params)}"
     elif anchor.place_id:
         url = (
