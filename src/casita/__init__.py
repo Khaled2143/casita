@@ -1067,8 +1067,12 @@ def _render_site(filename: str, output_dir: Path, profile: LifestyleProfile | st
         listings = rank(storage.active_listings(conn), status_map=status_map,
                         vote_scores=_vote_scores(conn), profile=profile)
         run = storage.latest_run(conn)
-        walk_map = walk.populate_for(listings, profile.all_anchors())
-        drive_map = walk.populate_drive_for_marin(listings, profile.all_anchors() + walk.SF_CENTER)
+        # Route every toggleable category (profiles.ALL_ANCHORS), not just the
+        # active profile's — the index page's client-side preference picker
+        # needs minutes-to-nearest for all 6 categories on every listing,
+        # regardless of which server profile is currently active.
+        walk_map = walk.populate_for(listings, profiles.ALL_ANCHORS)
+        drive_map = walk.populate_drive_for_marin(listings, profiles.ALL_ANCHORS + walk.SF_CENTER)
         drive_bakery_map = walk.populate_drive_for_bakeries(listings)
         convo_map = {
             L.key: storage.conversation_state(conn, L.key)
