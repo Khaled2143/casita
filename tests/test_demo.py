@@ -98,6 +98,45 @@ def test_demo_fixture_renders_offline_with_alternate_profile(tmp_path, monkeypat
     assert "Top pick" not in index_html
 
 
+def test_index_renders_preference_picker_chips_and_signals(tmp_path, monkeypatch):
+    """The client-side picker needs a chip per profiles.ALL_ANCHOR_GROUPS
+    (+ dogs) and a #casita-signals payload with every listing's raw minutes
+    to each category — independent of which server profile rendered the
+    page (default profile here).
+    """
+    import json as _json
+
+    from casita import profiles
+
+    fixture = casita.DEMO_FIXTURE
+    db_path = tmp_path / "demo.sqlite"
+    output_dir = tmp_path / "site"
+    shutil.copy2(fixture, db_path)
+
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+    monkeypatch.setenv("CASITA_DB_PATH", str(db_path))
+    monkeypatch.setenv("CASITA_ROUTE_CACHE_DB", str(db_path))
+    monkeypatch.setenv("CASITA_ROUTES_OFFLINE", "1")
+    monkeypatch.setenv("CASITA_SITE_URL", "http://127.0.0.1:8765")
+
+    result = casita._render_site("index.html", output_dir)
+    index_html = result["out_html"].read_text(encoding="utf-8")
+
+    assert 'data-pref="dogs"' in index_html
+    for group in profiles.ALL_ANCHOR_GROUPS:
+        assert f'data-pref="{group.key}"' in index_html
+
+    start = index_html.find('id="casita-signals">') + len('id="casita-signals">')
+    end = index_html.find("</script>", start)
+    signals = _json.loads(index_html[start:end])
+    assert len(signals) == result["listings"]
+    sample = next(iter(signals.values()))
+    for group in profiles.ALL_ANCHOR_GROUPS:
+        assert group.key in sample
+    for field in ("dog_policy", "pets_allowed", "beds", "baths", "laundry", "parking"):
+        assert field in sample
+
+
 def test_package_fixture_matches_repo_fixture():
     assert casita.DEMO_FIXTURE.read_bytes() == (
         casita.ROOT / "fixtures" / "demo.sqlite"
