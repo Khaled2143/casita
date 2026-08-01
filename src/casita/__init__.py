@@ -11,9 +11,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from . import craigslist, dedup, html, llm, redfin, storage, walk, zillow, zumper
+from . import craigslist, dedup, html, llm, profiles, redfin, storage, walk, zillow, zumper
 from .browser import context
 from .models import Listing
+from .profiles import LifestyleProfile
 from .rank import rank, score
 
 console = Console()
@@ -418,7 +419,10 @@ def solve():
 @cli.command()
 @click.option("--force", is_flag=True, help="Re-run extraction even for already-enriched listings.")
 @click.option("--local", is_flag=True, help="Skip GCS sync; operate on the local DB only.")
-def enrich(force: bool, local: bool):
+@click.option("--profile", "profile_key", default=None,
+              help="Lifestyle profile to rank against (see profiles.py). "
+                   "Defaults to CASITA_PROFILE or the household profile.")
+def enrich(force: bool, local: bool, profile_key: str | None):
     """Run Gemini extraction + ranking against the canonical DB.
 
     Idempotent: on a GCS generation conflict the whole pass re-runs against
@@ -426,10 +430,12 @@ def enrich(force: bool, local: bool):
     re-pays the LLM calls because llm_facts caches live in the discarded
     temp copy — acceptable at this tool's scale.
     """
-    _retry_canonical(local, lambda: _enrich_impl(force))
+    profile = profiles.get_profile(profile_key)
+    _retry_canonical(local, lambda: _enrich_impl(force, profile))
 
 
-def _enrich_impl(force: bool):
+def _enrich_impl(force: bool, profile: LifestyleProfile | None = None):
+    profile = profiles.get_profile(profile)
     with storage.connect() as conn:
         listings = storage.active_listings(conn)
         if not listings:
@@ -570,11 +576,11 @@ def _enrich_impl(force: bool):
                     continue
 
         # 2) Walking-time matrix (Routes API, cached).
-        walk_map = walk.populate_for(listings)
+        walk_map = walk.populate_for(listings, profile.all_anchors())
 
-        # 3) Cross-listing ranking with household priorities.
-        console.print("[bold]gemini ranking…[/bold]")
-        ranks = llm.rank_listings(listings, walk_map, conn)
+        # 3) Cross-listing ranking with the active profile's priorities.
+        console.print(f"[bold]gemini ranking…[/bold] (profile: {profile.key})")
+        ranks = llm.rank_listings(listings, walk_map, conn, profile=profile)
 
         # 3a) Share-card blurbs — one per listing. Uses the post-rank state
         # (so the blurb can reference llm_reason / severity) and persists.
@@ -1048,7 +1054,8 @@ def _generate_og_images(output_dir: Path, listings: list[Listing], run=None) -> 
     return count
 
 
-def _render_site(filename: str, output_dir: Path) -> dict[str, int | Path]:
+def _render_site(filename: str, output_dir: Path, profile: LifestyleProfile | str | None = None) -> dict[str, int | Path]:
+    profile = profiles.get_profile(profile)
     with storage.connect() as conn:
         # Cross-source dedup across the whole active set BEFORE we render —
         # catches duplicates that landed in separate scrape runs.
@@ -1058,10 +1065,10 @@ def _render_site(filename: str, output_dir: Path) -> dict[str, int | Path]:
         status_rows = conn.execute("SELECT listing_key, status FROM listing_status").fetchall()
         status_map = {r[0]: r[1] for r in status_rows}
         listings = rank(storage.active_listings(conn), status_map=status_map,
-                        vote_scores=_vote_scores(conn))
+                        vote_scores=_vote_scores(conn), profile=profile)
         run = storage.latest_run(conn)
-        walk_map = walk.populate_for(listings)
-        drive_map = walk.populate_drive_for_marin(listings)
+        walk_map = walk.populate_for(listings, profile.all_anchors())
+        drive_map = walk.populate_drive_for_marin(listings, profile.all_anchors() + walk.SF_CENTER)
         drive_bakery_map = walk.populate_drive_for_bakeries(listings)
         convo_map = {
             L.key: storage.conversation_state(conn, L.key)
@@ -1093,7 +1100,7 @@ def _render_site(filename: str, output_dir: Path) -> dict[str, int | Path]:
     out_html.parent.mkdir(exist_ok=True)
     out_html.write_text(html.render(
         listings, run=run, walk_map=walk_map, convo_map=convo_map,
-        drive_bakery_map=drive_bakery_map, drive_map=drive_map,
+        drive_bakery_map=drive_bakery_map, drive_map=drive_map, profile=profile,
     ), encoding="utf-8")
 
     # Per-listing detail pages — one file per active listing under tmp/listing/.
@@ -1106,7 +1113,7 @@ def _render_site(filename: str, output_dir: Path) -> dict[str, int | Path]:
             slug = listing_page._slug(L)
             page_html = listing_page.render_detail(
                 L, conn, walk_map=walk_map, drive_map=drive_map,
-                drive_bakery_map=drive_bakery_map,
+                drive_bakery_map=drive_bakery_map, profile=profile,
             )
             (listing_dir / f"{slug}.html").write_text(page_html,  encoding="utf-8")
             detail_count += 1
@@ -1170,10 +1177,14 @@ def _publish_impl(project: str | None, filename: str):
 )
 @click.option("--host", default="127.0.0.1", help="HTTP bind host.")
 @click.option("--port", default=8765, help="HTTP port; intentionally not 8000.")
-def demo(fixture: Path, host: str, port: int):
+@click.option("--profile", "profile_key", default=None,
+              help="Lifestyle profile to render (see profiles.py). "
+                   "Defaults to CASITA_PROFILE or the household profile.")
+def demo(fixture: Path, host: str, port: int, profile_key: str | None):
     """Render the committed fixture and serve it locally without credentials."""
     import shutil
 
+    profile = profiles.get_profile(profile_key)
     output_dir = ROOT / "tmp" / "demo-site"
     demo_db = ROOT / "tmp" / "demo.sqlite"
     if output_dir.exists():
@@ -1192,7 +1203,7 @@ def demo(fixture: Path, host: str, port: int):
     previous = {k: os.environ.get(k) for k in env_updates}
     try:
         os.environ.update(env_updates)
-        _render_site("index.html", output_dir)
+        _render_site("index.html", output_dir, profile=profile)
     finally:
         for key, value in previous.items():
             if value is None:
@@ -1332,8 +1343,9 @@ def analyze_prefs(local: bool):
     """Audit the static ranking policy against actual votes — propose edits.
 
     Reads every up/pass vote + reason, compares revealed preference against the
-    current `_RANK_SYSTEM`, and prints flagged contradictions + proposed new
-    rules. Proposes only — hand-edit `src/casita/llm.py` and commit.
+    default profile's `rank_prompt`, and prints flagged contradictions +
+    proposed new rules. Proposes only — hand-edit `src/casita/profiles.py`
+    and commit.
     """
     with _cloud_or_local(local, read_only=True):
         with storage.connect() as conn:
@@ -1370,8 +1382,8 @@ def analyze_prefs(local: bool):
             console.print(f"    [dim]{r.evidence}[/dim]")
 
     console.print(
-        "\n[dim]proposes only — hand-edit _RANK_SYSTEM in src/casita/llm.py "
-        "and commit the reconciled policy.[/dim]"
+        "\n[dim]proposes only — hand-edit the profile's rank_prompt in "
+        "src/casita/profiles.py and commit the reconciled policy.[/dim]"
     )
 
 
