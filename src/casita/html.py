@@ -1319,7 +1319,14 @@ def _anchor_link_html(anchor, *, origin: tuple[float, float] | None = None,
             params.append(f"destination_place_id={anchor.place_id}")
             params.append(f"destination={quote_plus(name_q)}")
         else:
-            params.append(f"destination={anchor.lat},{anchor.lng}")
+            # No place_id to pin an exact storefront — a bare lat,lng snaps
+            # to whatever's precisely at that point, which can be the wrong
+            # business next door. A name search lets Google's own index
+            # resolve it instead. Use the full name (it carries the street
+            # address, e.g. "Live Fit Gym (Inner Richmond, 403 Arguello
+            # Blvd)") rather than the stripped name_q — that address is
+            # exactly the disambiguating detail a bare business name lacks.
+            params.append(f"destination={quote_plus(anchor.name)}")
         url = f"https://www.google.com/maps/dir/?api=1&{'&'.join(params)}"
     elif anchor.place_id:
         url = (
