@@ -61,6 +61,43 @@ def test_demo_fixture_renders_offline(tmp_path, monkeypatch):
             assert response.headers.get_content_type() == "image/png"
 
 
+def test_demo_fixture_renders_offline_with_alternate_profile(tmp_path, monkeypatch):
+    """The sf_gym_halal profile re-ranks the same fixture with no Maps key —
+    haversine fallback covers the new gym/halal-market/commute anchors, so
+    this stays exactly as credentials-free as the default-profile demo.
+    """
+    fixture = casita.DEMO_FIXTURE
+    db_path = tmp_path / "demo.sqlite"
+    output_dir = tmp_path / "site"
+    shutil.copy2(fixture, db_path)
+
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+    monkeypatch.setenv("CASITA_DB_PATH", str(db_path))
+    monkeypatch.setenv("CASITA_ROUTE_CACHE_DB", str(db_path))
+    monkeypatch.setenv("CASITA_ROUTES_OFFLINE", "1")
+    monkeypatch.setenv("CASITA_SITE_URL", "http://127.0.0.1:8765")
+
+    result = casita._render_site("index.html", output_dir, profile="sf_gym_halal")
+    assert result["listings"] > 100
+
+    detail_pages = list((output_dir / "listing").glob("*.html"))
+    sample = detail_pages[0].read_text(encoding="utf-8")
+    assert '"k">gym<' in sample
+    assert '"k">halal market<' in sample
+    assert '"k">trail<' not in sample
+    assert '"k">beach<' not in sample
+    assert '"k">bakery<' not in sample
+
+    # No stale household-priority judgments — sf_gym_halal doesn't trust the
+    # fixture's llm_reason/severity, computed under sf_dogs's priorities.
+    for page in detail_pages:
+        text = page.read_text(encoding="utf-8")
+        assert 'class="why why-filtered"' not in text
+        assert 'class="why why-concerns"' not in text
+    index_html = result["out_html"].read_text(encoding="utf-8")
+    assert "Top pick" not in index_html
+
+
 def test_package_fixture_matches_repo_fixture():
     assert casita.DEMO_FIXTURE.read_bytes() == (
         casita.ROOT / "fixtures" / "demo.sqlite"

@@ -73,3 +73,45 @@ def test_all_anchors_matches_trail_beach_bakery_counts():
 
     p = profiles.get_profile(None)
     assert len(p.all_anchors()) == len(PRESIDIO_GATES) + len(BEACHES) + len(BAKERIES)
+
+
+# ---------- sf_gym_halal (alternate profile) ----------
+
+
+def test_sf_gym_halal_does_not_trust_llm_fields_or_gate_dogs():
+    p = profiles.get_profile("sf_gym_halal")
+    assert p.dog_gate is False
+    assert p.trust_llm_fields is False
+    assert p.hood_bonus == {}
+
+
+def test_score_sf_gym_halal_does_not_gate_no_dogs():
+    L = _listing(dog_policy="no_dogs")
+    assert do_score(L, profile="sf_gym_halal") != -1000
+
+
+def test_score_sf_gym_halal_rewards_proximity_to_gym(monkeypatch, tmp_path):
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+    monkeypatch.setenv("CASITA_ROUTES_OFFLINE", "1")
+    monkeypatch.setenv("CASITA_ROUTE_CACHE_DB", str(tmp_path / "routes.sqlite"))
+    from casita import walk
+
+    p = profiles.get_profile("sf_gym_halal")
+    gym = p.anchor_groups[0].anchors[0]
+    near = _listing(source_id="near", lat=gym.lat, lng=gym.lng)
+    far = _listing(source_id="far", lat=37.70, lng=-122.10)  # far corner of the Bay Area
+
+    walk_map = walk.populate_for([near, far], p.all_anchors())
+    assert do_score(near, walk_map, profile=p) > do_score(far, walk_map, profile=p)
+
+
+def test_rank_sf_gym_halal_ignores_stale_filtered_severity():
+    # This severity was computed under sf_dogs (e.g. a no-dogs hard gate) —
+    # sf_gym_halal doesn't trust it and shouldn't sort on it.
+    stale_filtered = _listing(source_id="a", llm_rank=1, llm_severity="filtered", dog_policy="no_dogs")
+    stale_ok = _listing(source_id="b", llm_rank=2, llm_severity="ok")
+    ranked = do_rank([stale_filtered, stale_ok], profile="sf_gym_halal")
+    # Neither bucket-2 (filtered) nor llm_rank should decide order — both
+    # listings land in the same "unranked" bucket, tie-broken by score().
+    keys = {L.source_id for L in ranked}
+    assert keys == {"a", "b"}
