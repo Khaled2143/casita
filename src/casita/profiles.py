@@ -281,6 +281,28 @@ PROFILES: dict[str, LifestyleProfile] = {
     ),
 }
 
+# Every toggleable category across both profiles — the source of truth for
+# the client-side preference picker (html.py PREFS_JS) and for which routes
+# _render_site precomputes regardless of the active server profile. Order is
+# display order in the picker's chip bar.
+#
+# bakery's weight is 1 here (vs 0 in sf_dogs's anchor_groups) — in sf_dogs
+# it's shown but never scored (a passive household fact); here a visitor
+# explicitly checking the "bakery" chip is opting in, so it should visibly
+# move the ranking like every other chip does.
+ALL_ANCHOR_GROUPS: list[AnchorGroup] = [
+    AnchorGroup("trail", "trail", PRESIDIO_GATES, weight=2, sweet_spot=10),
+    AnchorGroup("beach", "beach", BEACHES, weight=1, sweet_spot=10),
+    AnchorGroup("bakery", "bakery", BAKERIES, weight=1, sweet_spot=10),
+    AnchorGroup("gym", "gym", GYMS, weight=2, sweet_spot=15),
+    AnchorGroup("halal_market", "halal market", HALAL_MARKETS, weight=1, sweet_spot=15),
+    AnchorGroup("commute", "commute", WORK_COMMUTE, weight=1, sweet_spot=20),
+]
+
+# Flattened once — used to precompute routes for every toggleable category
+# regardless of which server profile is active (see _render_site).
+ALL_ANCHORS: list[Anchor] = [a for group in ALL_ANCHOR_GROUPS for a in group.anchors]
+
 DEFAULT_PROFILE_KEY = "sf_dogs"
 
 
