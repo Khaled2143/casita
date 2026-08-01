@@ -1078,7 +1078,7 @@ def _render_site(filename: str, output_dir: Path) -> dict[str, int | Path]:
 <head><meta charset="utf-8"><title>Casita</title></head>
 <body><p>No listings in DB. Run <code>casita search</code> first.</p></body>
 </html>
-""")
+""", encoding="utf-8")
         return {
             "out_html": out_html,
             "listings": 0,
@@ -1094,7 +1094,7 @@ def _render_site(filename: str, output_dir: Path) -> dict[str, int | Path]:
     out_html.write_text(html.render(
         listings, run=run, walk_map=walk_map, convo_map=convo_map,
         drive_bakery_map=drive_bakery_map, drive_map=drive_map,
-    ))
+    ), encoding="utf-8")
 
     # Per-listing detail pages — one file per active listing under tmp/listing/.
     from . import listing_page
@@ -1108,7 +1108,7 @@ def _render_site(filename: str, output_dir: Path) -> dict[str, int | Path]:
                 L, conn, walk_map=walk_map, drive_map=drive_map,
                 drive_bakery_map=drive_bakery_map,
             )
-            (listing_dir / f"{slug}.html").write_text(page_html)
+            (listing_dir / f"{slug}.html").write_text(page_html,  encoding="utf-8")
             detail_count += 1
 
     _copy_static_assets(output_dir)
