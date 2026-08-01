@@ -62,7 +62,7 @@ def _scrub(s: str | None) -> str | None:
         s = pat.sub("[redacted]", s)
     return s
 from .models import Listing
-from .walk import nearest
+from .walk import haversine_drive_minutes, nearest
 
 ROOT = Path(__file__).parent.parent.parent
 
@@ -316,11 +316,19 @@ def _render_kv(L: Listing, walk_map, drive_map, drive_bakery, profile: Lifestyle
             if not best:
                 continue
             a, m = best
-            # Bakery-specific fallback: past a 45-min walk, show the drive
-            # time instead — same special case the card has always had.
-            if group.key == "bakery" and m > 45 and drive_bakery:
+            # Past a comfortable walk, show a drive-time estimate instead —
+            # an 80+ minute "walk" reads as nonsense. Bakery prefers its
+            # precomputed Marin drive_bakery value when available; every
+            # other group (and bakery when that's not available) falls back
+            # to an on-the-fly haversine drive estimate — no cache, no API
+            # call, so this stays fully offline.
+            if m > 45 and group.key == "bakery" and drive_bakery:
                 d_a, d_m = drive_bakery
                 link = _anchor_link_html(d_a, origin=origin, mode="driving")
+                rows.append(row(group.label, f'{d_m} min{DRIVE_SUFFIX} · {link}'))
+            elif m > 45 and L.lat is not None and L.lng is not None:
+                d_m = haversine_drive_minutes(L.lat, L.lng, a)
+                link = _anchor_link_html(a, origin=origin, mode="driving")
                 rows.append(row(group.label, f'{d_m} min{DRIVE_SUFFIX} · {link}'))
             else:
                 link = _anchor_link_html(a, origin=origin, mode="walking")

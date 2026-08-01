@@ -137,6 +137,16 @@ def _haversine_drive_minutes(lat: float, lng: float, anchor: Anchor) -> int:
     return max(1, round((km / _DRIVE_SPEED_KMH) * 60))
 
 
+def haversine_drive_minutes(lat: float, lng: float, anchor: Anchor) -> int:
+    """Public ad hoc drive-time estimate — no cache, no API call.
+
+    For "this walk is too far, show a drive estimate instead" fallbacks
+    where there's no precomputed drive_map entry (e.g. an SF listing far
+    from a profile's anchor; drive_map only covers Marin listings).
+    """
+    return _haversine_drive_minutes(lat, lng, anchor)
+
+
 # ---------- cache (rounded coords as key) ----------
 #
 # Lives in a dedicated local DB, NOT the canonical GCS DB. The
