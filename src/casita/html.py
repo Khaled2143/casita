@@ -255,13 +255,12 @@ PREFS_JS = """<script>
   var chips = Array.from(document.querySelectorAll('.pref-chip'));
   if (!chips.length) return;
 
-  var PREF_GROUPS = {
-    trail:        { weight: 2, sweetSpot: 10 },
-    beach:        { weight: 1, sweetSpot: 10 },
-    bakery:       { weight: 1, sweetSpot: 10 },
-    gym:          { weight: 2, sweetSpot: 15 },
-    halal_market: { weight: 1, sweetSpot: 15 },
-    commute:      { weight: 1, sweetSpot: 20 }
+  var PREF_GROUPS = signals._meta || {};
+
+  
+  var LABELS = {
+    trail: 'Trail', beach: 'Beach', bakery: 'Bakery',
+    gym: 'Gym', halal_market: 'Halal market', commute: 'Commute'
   };
 
   // Original server-rendered order, captured once before any reordering —
@@ -310,6 +309,12 @@ PREFS_JS = """<script>
 
   function apply() {
     var active = activePrefs();
+    // Clear any prior highlight state first.
+    originalOrder.forEach(function(c) {
+      c.classList.remove('pref-hit');
+      var pill = c.querySelector('.pref-hit-pill');
+      if (pill) pill.remove();
+    });
     if (!active.length) {
       document.body.removeAttribute('data-customizing');
       originalOrder.forEach(function(c) { grid.appendChild(c); });
@@ -320,6 +325,24 @@ PREFS_JS = """<script>
     var groups = active.filter(function(k) { return k !== 'dogs'; });
     var scored = originalOrder.map(function(c) {
       var sig = signals[c.dataset.key] || {};
+      // Find the closest selected category under 10 min for the highlight.
+      var best = null;
+      groups.forEach(function(key) {
+        var mins = sig[key];
+        if (mins === null || mins === undefined) return;
+        if (mins < 10 && (best === null || mins < best.mins)) {
+          best = { key: key, mins: mins };
+        }
+      });
+      if (best) {
+        c.classList.add('pref-hit');
+        var pill = document.createElement('div');
+        pill.className = 'pref-hit-pill';
+        var label = LABELS[best.key] || best.key;
+        pill.textContent = label + ' · ' + best.mins + ' min';
+        var body = c.querySelector('.body');
+        if (body) body.insertBefore(pill, body.firstChild);
+      }
       return { card: c, score: scoreListing(sig, groups, dogsOn) };
     });
     scored.sort(function(a, b) { return b.score - a.score; });
@@ -836,10 +859,10 @@ h1 {
   color: var(--ink-2); font-size: 12px; margin-top: 2px;
 }
 .card-vote-badge {
-  position: absolute; top: 12px; right: 12px;
+  position: absolute; top: 40px; left: 13px;
   font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
   padding: 4px 9px; border-radius: 999px; pointer-events: none;
-  text-transform: uppercase; z-index: 3;
+  text-transform: uppercase; z-index: 4;
   backdrop-filter: blur(8px);
 }
 .card-vote-badge[data-vote="up"]   { background: var(--accent); color: #fff; }
@@ -876,6 +899,20 @@ h1 {
   display: block;
   color: inherit;
   text-decoration: none;
+}
+
+.card.pref-hit {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 6px 18px var(--shadow);
+}
+.pref-hit-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  align-self: flex-start;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid transparent;
 }
 .card-body-link:hover { text-decoration: none; }
 .card-body-link * { text-decoration: none; }
@@ -1772,6 +1809,10 @@ def _signal_payload(listings: list[Listing], walk_map: dict, drive_map: dict) ->
             best = nearest(source, L.key, group.anchors)
             signals[group.key] = best[1] if best else None
         payload[L.key] = signals
+    payload["_meta"] = {
+        group.key: {"weight": group.weight, "sweetSpot": group.sweet_spot}
+        for group in ALL_ANCHOR_GROUPS
+    }
     return payload
 
 
@@ -1898,7 +1939,7 @@ def render(
       {THEME_SWITCH_HTML}
     </div>
   </div>
-  <p class="lede">A rental-search snapshot for a household with two large dogs: SF walkability, Marin drive times, trail access, and good bread nearby.</p>
+  <p class="lede">These picks are ranked for a dog owner who loves trails and good bread. Not you? Customize the ranking below.</p>
   {stats_html}
   <div class="toolbar">
     <div class="search-box">

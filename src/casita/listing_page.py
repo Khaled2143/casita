@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from . import dogs
-from .profiles import LifestyleProfile, get_profile
+from .profiles import LifestyleProfile, get_profile, ALL_ANCHOR_GROUPS
 from .html import (
     CAROUSEL_JS,
     CSS,
@@ -304,7 +304,7 @@ def _render_kv(L: Listing, walk_map, drive_map, drive_bakery, profile: Lifestyle
                 if m is None: continue
                 if best is None or m < best[1]: best = (a, m)
             return best
-        for group in profile.anchor_groups:
+        for group in ALL_ANCHOR_GROUPS:
             b = _best(group.anchors)
             if b:
                 a, m = b
@@ -315,7 +315,7 @@ def _render_kv(L: Listing, walk_map, drive_map, drive_bakery, profile: Lifestyle
             link = _anchor_link_html(_SFC[0], origin=origin, mode="driving")
             rows.append(row("to sf", f'{sf} min{DRIVE_SUFFIX} · {link}'))
     elif walk_map is not None:
-        for group in profile.anchor_groups:
+        for group in ALL_ANCHOR_GROUPS:
             best = nearest(walk_map, L.key, group.anchors)
             if not best:
                 continue
