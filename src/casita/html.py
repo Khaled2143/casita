@@ -1455,12 +1455,14 @@ def _card(L: Listing, walk_map: dict | None = None, convo: dict | None = None,
 
     # Severity → card-level border class. Color carries the meaning; no badge.
     # Only trust the DB's llm_severity/llm_rank when they were computed under
-    # the active profile — otherwise they're stale household-priority output.
+    # the active profile — otherwise they're stale household-priority output,
+    # and showing them (even as a uniform "ok") would falsely claim this
+    # profile vetted the listing. sev stays None: no border color, no fit
+    # badge, order alone carries the (deterministic) ranking signal.
+    sev = None
     if profile.trust_llm_fields:
         sev = L.llm_severity or ("filtered" if (L.llm_rank or 0) >= 9000 else "ok")
-    else:
-        sev = "ok"
-    sev_class = f"sev-{sev}"
+    sev_class = f"sev-{sev}" if sev else ""
 
     # Eliminated overlay — soft-delete via listing_status. Pushed to the bottom
     # by rank(); here we just dim the card and surface the reason inline.
