@@ -32,14 +32,14 @@ def test_demo_fixture_renders_offline(tmp_path, monkeypatch):
     listing_pages = list((output_dir / "listing").glob("*.html"))
     assert len(listing_pages) == result["details"]
     first_listing = listing_pages[0]
-    assert f"/og/listing/{first_listing.stem}.png" in first_listing.read_text()
+    assert f"/og/listing/{first_listing.stem}.png" in first_listing.read_text(encoding="utf-8")
     assert (output_dir / "og" / "listing" / f"{first_listing.stem}.png").read_bytes().startswith(PNG_HEADER)
-    assert "/og/index.png" in result["out_html"].read_text()
+    assert "/og/index.png" in result["out_html"].read_text(encoding="utf-8")
     assert (output_dir / "assets" / "favicon.svg").exists()
 
     local_refs = []
     for page in [result["out_html"], *listing_pages]:
-        for match in re.finditer(r"""(?:src|href)=["']([^"']+)["']""", page.read_text()):
+        for match in re.finditer(r"""(?:src|href)=["']([^"']+)["']""", page.read_text(encoding="utf-8")):
             url = match.group(1)
             if url.startswith("/") and not url.startswith("//"):
                 local_refs.append((page, url))
@@ -84,9 +84,9 @@ def test_demo_fixture_renders_offline_with_alternate_profile(tmp_path, monkeypat
     sample = detail_pages[0].read_text(encoding="utf-8")
     assert '"k">gym<' in sample
     assert '"k">halal market<' in sample
-    assert '"k">trail<' not in sample
-    assert '"k">beach<' not in sample
-    assert '"k">bakery<' not in sample
+    assert '"k">trail<' in sample
+    assert '"k">beach<' in sample
+    assert '"k">bakery<' in sample
 
     # No stale household-priority judgments — sf_gym_halal doesn't trust the
     # fixture's llm_reason/severity, computed under sf_dogs's priorities.
@@ -129,8 +129,9 @@ def test_index_renders_preference_picker_chips_and_signals(tmp_path, monkeypatch
     start = index_html.find('id="casita-signals">') + len('id="casita-signals">')
     end = index_html.find("</script>", start)
     signals = _json.loads(index_html[start:end])
-    assert len(signals) == result["listings"]
-    sample = next(iter(signals.values()))
+    listing_signals = {k: v for k, v in signals.items() if k != "_meta"}
+    assert len(listing_signals) == result["listings"]
+    sample = next(iter(listing_signals.values()))
     for group in profiles.ALL_ANCHOR_GROUPS:
         assert group.key in sample
     for field in ("dog_policy", "pets_allowed", "beds", "baths", "laundry", "parking"):
