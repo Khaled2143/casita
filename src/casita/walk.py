@@ -269,18 +269,23 @@ def is_marin(L) -> bool:
     return L.lat is not None and L.lng is not None and L.lat > 37.84
 
 
-def populate_drive_for_marin(listings) -> dict[tuple[str, str], int]:
+def populate_drive_for_marin(listings, anchors: list[Anchor] | None = None) -> dict[tuple[str, str], int]:
     """For Marin listings, compute DRIVE time to every SF anchor (trails,
     beaches, bakeries, SF center). Returns {(listing.key, anchor.name): minutes}.
 
     Walking 25+ minutes to Baker Beach is nonsensical from Mill Valley — they'd
     drive. This populates the matrix so the renderer can show drive-time rows.
+
+    `anchors` defaults to the household's trail/beach/bakery/SF-center set;
+    callers can pass a different anchor list (e.g. a LifestyleProfile's) to
+    route a different set of points of interest.
     """
     marin = [L for L in listings if is_marin(L)]
     if not marin:
         return {}
 
-    anchors = BEACHES + BAKERIES + TRAILS + SF_CENTER
+    if anchors is None:
+        anchors = BEACHES + BAKERIES + TRAILS + SF_CENTER
     result: dict[tuple[str, str], int] = {}
     pending_origins: list[tuple[float, float]] = []
     seen_origin: set[tuple[float, float]] = set()
@@ -343,12 +348,17 @@ def populate_drive_for_bakeries(listings):
     return out
 
 
-def populate_for(listings) -> dict[tuple[str, str], int]:
+def populate_for(listings, anchors: list[Anchor] | None = None) -> dict[tuple[str, str], int]:
     """Ensure every (listing, anchor) pair has a cached minutes value.
 
     Returns a dict keyed by (listing.key, anchor.name) → minutes.
+
+    `anchors` defaults to the household's trail/beach/bakery set; callers can
+    pass a different anchor list (e.g. a LifestyleProfile's) to route a
+    different set of points of interest.
     """
-    anchors = BEACHES + BAKERIES + PRESIDIO_GATES
+    if anchors is None:
+        anchors = BEACHES + BAKERIES + PRESIDIO_GATES
     result: dict[tuple[str, str], int] = {}
     pending_origins: list[tuple[float, float]] = []
     pending_pairs: list[tuple[str, str, float, float, float, float]] = []

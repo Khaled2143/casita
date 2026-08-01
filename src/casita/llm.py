@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from . import cache
 from .models import Listing
+from .profiles import LifestyleProfile, get_profile
 
 load_dotenv()
 
@@ -225,142 +226,11 @@ _EXTRACT_SYSTEM = (
     "Extract the requested fields. Be conservative — return null when unclear."
 )
 
-_RANK_SYSTEM = textwrap.dedent("""
-    You're ranking rental listings for a household looking in San Francisco
-    (Richmond / Sunset / Presidio-adjacent) or Marin (Mill Valley / Sausalito).
-    They have two large dogs, prefer 2-3 bedrooms, and value access to trails,
-    beaches, bakeries, and practical daily transportation.
-
-    ── PRECEDENCE — how to resolve conflicting signals ──
-      • This prompt is settled policy, but the household's actual votes
-        (provided as PREFERENCE EXAMPLES before the listings, when present) are
-        the ground truth. Where an example conflicts with a SOFT policy line
-        here, follow the examples — they reflect the most current preference.
-      • HARD REQUIREMENTS below always win, even over examples (dog policy, etc.).
-      • When reviewer signals conflict, prefer the reviewer_a examples over
-        reviewer_b examples. reviewer_a is the primary preference signal.
-
-    ── HARD REQUIREMENTS — drop the listing from results if any fail ──
-      • Dog policy — the household has two large dogs. Hard rules:
-          - **no_dogs** → severity="filtered", drop to the bottom, reason
-            starts with "No dogs allowed".
-          - **small_only** → severity="concerns" ALWAYS, never "ok". Reason
-            MUST start with "Small dogs only — would need to negotiate"
-            because the badge says SMALL DOGS ONLY and the rank reason has
-            to match the badge. Never describe these as "dog-friendly".
-            They should not outrank a comparable dogs_ok / large_ok listing.
-          - **dogs_ok / large_ok** → eligible for severity="ok".
-          - **null/unknown** → severity="concerns", flag the verification need.
-      • For Marin listings: a private yard is strongly preferred
-        (fenced backyard, side yard, or private patio with grass). NEVER
-        hard-filter a Marin listing for yard alone — treat missing/
-        unknown yard data as severity="concerns" and flag for verification.
-        Only mark a Marin yard-less listing severity="filtered" if
-        ALL of these are true: (a) yard is explicitly false in the data,
-        AND (b) has_yard is the listing's primary problem (other factors
-        like pet policy aren't already disqualifying).
-      • Listings missing critical data like price or beds (showing as ? or 0)
-        should still be included if the title suggests it's a real listing —
-        flag the missing data in the reason.
-
-    ── STRONG REQUIREMENTS — heavy penalty if missing, not a hard gate ──
-      • Location must be in-scope: SF Inner/Outer Richmond, Inner/Outer Sunset,
-        Lake Street, Presidio Heights, Central Richmond/Sunset; OR Marin —
-        Mill Valley (incl. Tam Valley, Homestead Valley, Almonte) or Sausalito.
-      • Size: **≥120 m² (≈1,292 sqft) is the comfortable floor** for two adults
-        and two large dogs. Treat smaller sizes as significant penalty:
-          - 100–119 m² (1,076–1,292 sqft): tight, flag in reason
-          - <100 m² (<1,076 sqft): too small, downgrade hard or filter
-        If sqft is missing entirely, don't gate — flag as needs verification.
-      • In-unit laundry strongly preferred. "Shared in building" is acceptable;
-        hookups-only or none is a significant penalty.
-      • Parking on-site (garage, attached, off-street). Street-only is
-        workable in SF, but is a soft penalty.
-      • Trail OR beach access — REVEALED AS NEAR-MANDATORY. ~80% of the passes
-        so far cite "not walkable to a trail or beach," so treat this as a
-        strong requirement, not a tie-breaker: a listing that isn't within an
-        easy walk (SF) / short drive (Marin) of EITHER a trail or a beach gets
-        a heavy penalty → severity="concerns", ranked low. NOT a hard gate —
-        never "filtered"-drop on trail/beach distance alone. (Which specific
-        anchor — Baker, the Presidio gates, the Dipsea — still breaks ties; see
-        PREFERENCES.)
-      • Aesthetics is a SOFT tie-breaker, NOT a heavy penalty. The household
-        cares about design, but the votes are clear: location beats finishes. "It's
-        ugly but we can take a look" was an UP vote. Treat dated / low-end
-        finishes as a "concerns" flag at most — never rank a well-located place
-        low for looks alone, and never "filtered" on aesthetics.
-
-    ── DISTANCE MODES ──
-    The brief's "walks" field is prefixed with WALKING (SF) or DRIVING (Marin).
-    For SF listings, all times are WALKING — apply the bakery preference, etc.
-    For Marin/Mill Valley listings, all times are DRIVING — these are different
-    units. Don't penalize a Mill Valley listing for being "far" from SF anchors
-    when a 20-minute drive is normal there.
-
-    ── PREFERENCES — in priority order, used to break ties and shape ranking ──
-      (Trail/beach ACCESS is now a strong requirement above; #2/#3 here govern
-       how close and which anchor — they break ties among listings that qualify.)
-      1. Close to SF. For SF listings this means walking distance to Muni /
-         downtown. For Marin listings this means proximity to ferry service or
-         the Golden Gate Bridge.
-      2. Close to trail access. SF = Presidio gates (Arguello, Lyon, West
-         Pacific). Marin = Dipsea / Tennessee Valley / Headlands access.
-      3. Close to a beach. **Baker Beach is the preferred beach** — proximity
-         to Baker carries more weight than proximity to China or Ocean (and in
-         Marin, Muir / Stinson). When evaluating, look at the named anchor in
-         the brief; if it's Baker, that's a stronger positive.
-      4. Close to a bakery or cafe-with-pastries.
-         For SF listings: the bar is 4.7★ + 1,500+ reviews. Qualifying set:
-         Arsicault, Cinderella, b. patisserie, Arizmendi — all in SF.
-         **Arsicault is the preferred favorite** — proximity to Arsicault
-         carries more weight than the others.
-         For Marin listings: the bar is lower (4.5★+ / 100+ reviews) because
-         the market is smaller. Qualifying set: Bob's Donuts, Madrona,
-         Equator Coffees Mill Valley, Emporio Rulli Larkspur. Don't
-         over-penalize Marin listings on this dimension — driving is expected,
-         and the local options are real (just lower-volume).
-
-    ── ENGAGEMENT BOOST — listings where we're already in conversation ──
-      If the listing's status is one of: contacted, viewing_scheduled,
-      viewing_done, shortlist, applied — rank it higher than fresh listings
-      with similar facts. Conversations have momentum; protect that.
-      Exception: if status is declined_by_us or declined_by_landlord, the
-      listing is dead — leave it out.
-
-    ── SOFT BONUSES ──
-      • 3 bed > 2 bed
-      • Private yard (huge bonus in SF, very strong preference in Marin)
-      • In-unit laundry
-      • Garage parking
-      • Inner Richmond / Lake Street / Presidio Heights / Inner Sunset.
-      • Downtown Mill Valley walkability.
-
-    ── OUTPUT FORMAT ──
-    Return EVERY listing in the input — none dropped silently. Order best
-    first. Each entry has:
-      • key: the listing key
-      • reason: one short sentence with the load-bearing facts
-      • severity:
-          - "ok"       → A strong fit given SF rental realities. Calibrate
-                         to the market, not to an ideal:
-                           * Street parking is NORMAL in SF — not a concern.
-                           * Shared laundry-in-building is fine — not a concern.
-                           * No private yard in SF is the default — not a concern.
-                           * 1 bath in a 2-bed, or 1.5 bath in a 3-bed, is
-                             normal — not a concern.
-                         A 3BR/1.5BA Inner Richmond remodel with W/D and
-                         street parking IS as good as SF gets — that's "ok".
-          - "concerns" → Actual red flags worth pausing on:
-                           * Missing critical data (no price, no bed count)
-                           * Small-dogs-only or weight-cap (needs negotiation)
-                           * Visibly dated / cheap finishes / "needs work"
-                           * Out-of-scope neighborhood
-                           * Marin without yard data verified
-                           * Hookups-only or NO laundry at all
-          - "filtered" → Hard gate fail (no-dogs explicit, multi-unit
-                         building landing pages with no usable listing
-                         data) — sort to the bottom.
-""").strip()
+# The ranking policy itself now lives on the active LifestyleProfile
+# (profiles.py) as `rank_prompt` — this is a backward-compatible alias to
+# the default household's prompt, kept for `analyze_preferences`'s
+# unparameterized usage below.
+_RANK_SYSTEM = get_profile(None).rank_prompt
 
 
 # ---------- helpers ----------
@@ -640,15 +510,17 @@ def _preference_examples(conn: sqlite3.Connection, *, cap: int = _EXAMPLES_CAP) 
 
 
 def rank_listings(
-    listings: list[Listing], walk_map: dict, conn: sqlite3.Connection
+    listings: list[Listing], walk_map: dict, conn: sqlite3.Connection,
+    *, profile: LifestyleProfile | str | None = None,
 ) -> dict[str, tuple[int, str, str]]:
     """Return {key: (rank, reason, severity)}."""
     if not listings:
         return {}
 
-    from .walk import BAKERIES, BEACHES, SF_CENTER, TRAILS, minutes_to, nearest, is_marin, populate_drive_for_marin
+    profile = get_profile(profile)
+    from .walk import SF_CENTER, minutes_to, nearest, is_marin, populate_drive_for_marin
 
-    drive_map = populate_drive_for_marin(listings)
+    drive_map = populate_drive_for_marin(listings, profile.all_anchors() + SF_CENTER)
 
     def _walk_summary(L: Listing) -> str:
         if is_marin(L) and drive_map:
@@ -665,23 +537,17 @@ def rank_listings(
             bits = ["DRIVING (Marin)"]
             sf = drive_map.get((L.key, SF_CENTER[0].name))
             if sf is not None: bits.append(f"{sf}m drive to SF")
-            t = _best(TRAILS)
-            if t: bits.append(f"{t[1]}m drive trail({t[0].short})")
-            b = _best(BEACHES)
-            if b: bits.append(f"{b[1]}m drive beach({b[0].short})")
-            ba = _best(BAKERIES)
-            if ba: bits.append(f"{ba[1]}m drive bakery({ba[0].short})")
+            for group in profile.anchor_groups:
+                best = _best(group.anchors)
+                if best: bits.append(f"{best[1]}m drive {group.label}({best[0].short})")
             return ", ".join(bits)
         # SF: walking.
         sf = minutes_to(walk_map, L.key, SF_CENTER[0])
-        np = nearest(walk_map, L.key, TRAILS)
-        nb = nearest(walk_map, L.key, BEACHES)
-        nba = nearest(walk_map, L.key, BAKERIES)
         bits = ["WALKING (SF)"]
         if sf is not None: bits.append(f"{sf}m walk SF")
-        if np: bits.append(f"{np[1]}m walk trail({np[0].short})")
-        if nb: bits.append(f"{nb[1]}m walk beach({nb[0].short})")
-        if nba: bits.append(f"{nba[1]}m walk bakery({nba[0].short})")
+        for group in profile.anchor_groups:
+            best = nearest(walk_map, L.key, group.anchors)
+            if best: bits.append(f"{best[1]}m walk {group.label}({best[0].short})")
         return ", ".join(bits)
 
     feedback_map = _current_feedback(conn, [L.key for L in listings])
@@ -692,7 +558,7 @@ def rank_listings(
     # start → content is byte-identical to the voteless baseline.
     examples = _preference_examples(conn)
     content = (examples + "\n\n" if examples else "") + "Listings:\n" + body
-    result = _call_structured(RANK_MODEL, _RANK_SYSTEM, content, RankList)
+    result = _call_structured(RANK_MODEL, profile.rank_prompt, content, RankList)
     if result is None:
         return {}
     assert isinstance(result, RankList)
